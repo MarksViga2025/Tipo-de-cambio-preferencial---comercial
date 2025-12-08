@@ -18,6 +18,25 @@ from tc_sunat_model import (
 
 from tc_lstm_model import entrenar_lstm_tc, pronosticar_lstm_tc
 
+@st.cache_resource
+def entrenar_lstm_tc_cached(
+    serie_tc: pd.Series,
+    fecha_corte: date,
+    ventana: int,
+    epochs: int,
+    batch_size: int,
+    seed: int,
+):
+    # Streamlit sabe cómo hashear Series, dates, ints, etc.
+    return entrenar_lstm_tc(
+        serie_tc=serie_tc,
+        fecha_corte=fecha_corte,
+        ventana=ventana,
+        epochs=epochs,
+        batch_size=batch_size,
+        seed=seed,
+    )
+
 
 def plot_hist_y_sim(df_hist: pd.DataFrame, fechas_future, paths: np.ndarray):
     """Gráfico interactivo del histórico reciente + trayectorias simuladas."""
@@ -352,12 +371,13 @@ def main():
     try:
         # Entrenar LSTM usando toda la historia hasta la fecha de inicio
         serie_tc = df_sunat_habiles["tc_sunat"]
-        model_lstm, scaler_lstm, ventana_lstm = entrenar_lstm_tc(
+        model_lstm, scaler_lstm, ventana_lstm = entrenar_lstm_tc_cached(
             serie_tc=serie_tc,
             fecha_corte=fecha_inicio,
             ventana=60,      # puedes jugar con esto
             epochs=25,       # ojo con el tiempo de cómputo
             batch_size=16,
+            seed=42,  # fijo → mismos resultados con mismos datos
         )
 
         # Pronosticar el TC LSTM sobre las mismas fechas_future
