@@ -16,6 +16,8 @@ from tc_sunat_model import (
     var_cvar_retorno,
 )
 
+from tc_lstm_model import entrenar_lstm_tc, pronosticar_lstm_tc
+
 
 def plot_hist_y_sim(df_hist: pd.DataFrame, fechas_future, paths: np.ndarray):
     """Gráfico interactivo del histórico reciente + trayectorias simuladas."""
@@ -76,9 +78,33 @@ def plot_escenarios_y_var(df_resumen: pd.DataFrame, tc_var: float):
     (derivado del VaR).
     """
     x = df_resumen.index
-
+    
     fig = go.Figure()
 
+    # Media simulada (Monte Carlo / GARCH)
+    fig.add_trace(
+        go.Scatter(
+            x=fechas_future,
+            y=df_resumen["media"],
+            mode="lines",
+            name="Media proyectada (simulada)",
+            line=dict(color="#1f77b4"),
+        )
+    )
+
+    # Si tenemos camino LSTM, lo agregamos
+    if serie_lstm is not None:
+        fig.add_trace(
+            go.Scatter(
+                x=serie_lstm.index,
+                y=serie_lstm.values,
+                mode="lines",
+                name="Camino LSTM (estimado)",
+                line=dict(color="#ff7f0e", dash="dash"),
+            )
+        )
+    
+    
     # Banda 5%-95%
     fig.add_trace(
         go.Scatter(
@@ -320,6 +346,37 @@ def main():
         # Número fijo de simulaciones
         n_sims = 10000
 
+    # ------------------------------------------------------------
+    # 2bis) Camino determinista LSTM (no afecta VaR/CVaR)
+    # ------------------------------------------------------------
+    try:
+        # Entrenar LSTM usando toda la historia hasta la fecha de inicio
+        serie_tc = df_sunat_habiles["tc_sunat"]
+        model_lstm, scaler_lstm, ventana_lstm = entrenar_lstm_tc(
+            serie_tc=serie_tc,
+            fecha_corte=fecha_inicio,
+            ventana=60,      # puedes jugar con esto
+            epochs=25,       # ojo con el tiempo de cómputo
+            batch_size=16,
+        )
+
+        # Pronosticar el TC LSTM sobre las mismas fechas_future
+        serie_lstm = pronosticar_lstm_tc(
+            model=model_lstm,
+            scaler=scaler_lstm,
+            serie_tc=serie_tc,
+            fecha_corte=fecha_inicio,
+            fechas_future=pd.DatetimeIndex(fechas_future),
+            ventana=ventana_lstm,
+        )
+
+        tc_lstm_final = float(serie_lstm.iloc[-1])
+ except Exception as e:
+        serie_lstm = None
+        tc_lstm_final = None
+        # Si algo falla, no rompemos la app, sólo mostramos un aviso
+        st.warning(f"No se pudo calcular el camino LSTM: {e}")    
+        
         try:
             paths = simular_arma_garch(res_garch, S0=S0, n_steps=n_steps, n_sims=n_sims)
         except Exception as e:
@@ -341,7 +398,7 @@ def main():
         # ------------------------------------------------------------------
         st.subheader("Resumen numérico de la proyección")
 
-        col1, col2, col3, col4 = st.columns(4)
+        col1, col2, col3, col4, col5 = st.columns(5)
         with col1:
             st.metric("TC SUNAT actual (aprox.)", f"{S0:.4f}")
         with col2:
@@ -350,11 +407,17 @@ def main():
                 f"{df_resumen['media'].iloc[-1]:.4f}",
             )
         with col3:
+            if tc_lstm_final is not None:
+               st.metric("TC estimado por modelo (LSTM)", f"{tc_lstm_final:.4f}")
+            else:
+               st.metric("TC estimado por modelo (LSTM)", "N/D"
+            )
+        with col4:
             st.metric(
                 "Tipo de cambio mínimo propuesto",
                 f"{tc_var:.4f}",
             )
-        with col4:
+        with col5:
             st.metric(
                 "Tipo de cambio propuesto",
                 f"{tc_cvar:.4f}",
@@ -377,7 +440,7 @@ def main():
 
         # Gráfico 2: media, banda y TC mínimo propuesto
         st.subheader("Escenarios de proyección y tipo de cambio mínimo propuesto")
-        fig_var = plot_escenarios_y_var(df_resumen, tc_var)
+        fig_var = plot_escenarios_y_var(df_resumen, tc_var, serie_lstm)
         st.plotly_chart(fig_var, use_container_width=True)
 
         # Backtesting si aplica
