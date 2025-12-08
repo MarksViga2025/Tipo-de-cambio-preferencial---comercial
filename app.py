@@ -391,7 +391,7 @@ def main():
         )
 
         tc_lstm_final = float(serie_lstm.iloc[-1])
- except Exception as e:
+   except Exception as e:
         serie_lstm = None
         tc_lstm_final = None
         # Si algo falla, no rompemos la app, sólo mostramos un aviso
