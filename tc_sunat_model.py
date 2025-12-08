@@ -115,19 +115,40 @@ def es_habil(d: date) -> bool:
     """True si es día hábil en Perú (lunes-viernes y no feriado)."""
     return (d.weekday() < 5) and (d not in FERIADOS_PE)
 
+def siguiente_habil(fecha: date) -> date:
+    """
+    Devuelve la propia fecha si es hábil; si no lo es,
+    avanza hasta el siguiente día hábil (no fin de semana y no feriado).
+    """
+    d = fecha
+    while not es_habil(d):
+        d += timedelta(days=1)
+    return d
 
-def contar_dias_habiles(fecha_inicio: date, fecha_fin: date) -> int:
-    """Cuenta días hábiles estrictamente entre fecha_inicio y fecha_fin."""
-    if fecha_fin <= fecha_inicio:
-        return 0
+def contar_dias_habiles(fecha_inicio: date, fecha_final_cal: date) -> int:
+    """
+    Cuenta los días hábiles estrictamente posteriores a fecha_inicio
+    hasta la fecha final efectiva (incluida).
+
+    La fecha final efectiva es:
+      - la propia fecha_final_cal si es hábil, o
+      - el siguiente día hábil si cae en sábado, domingo o feriado.
+
+    Ejemplo:
+      fecha_inicio = 2025-10-06 (lunes)
+      fecha_final_cal = 2025-10-11 (sábado)
+      --> fecha_final_efectiva = 2025-10-13 (lunes)
+      Se cuentan los días hábiles 7, 8, 9, 10, 13.
+    """
+    fecha_fin_efectiva = siguiente_habil(fecha_final_cal)
+
     d = fecha_inicio
-    contador = 0
-    while d < fecha_fin:
+    n = 0
+    while d < fecha_fin_efectiva:
         d += timedelta(days=1)
         if es_habil(d):
-            contador += 1
-    return contador
-
+            n += 1
+    return n
 
 def generar_fechas_habiles(fecha_inicio: date, n_dias_habiles: int):
     """Genera una lista de timestamps para los próximos n_dias_habiles."""
@@ -436,4 +457,3 @@ def simular_arma_garch(res_garch, S0: float, n_steps: int, n_sims: int) -> np.nd
     paths = np.exp(log_all).T           # (n_sims, n_steps + 1)
 
     return paths
-
