@@ -425,7 +425,7 @@ def simular_arma_garch(res_garch, S0: float, n_steps: int, n_sims: int) -> np.nd
         var_uncond = omega / (1.0 - alpha - beta)
     else:
         # Si el proceso es casi no estacionario, usamos varianza de los residuos en %
-        var_uncond = float(np.var(res_garch.resid * 100.0))
+        var_uncond = float(np.var(res_garch.resid))
 
     if var_uncond <= 0:
         var_uncond = 1.0
