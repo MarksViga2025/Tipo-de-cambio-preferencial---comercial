@@ -91,19 +91,24 @@ def plot_hist_y_sim(df_hist: pd.DataFrame, fechas_future, paths: np.ndarray):
     return fig
 
 
-def plot_escenarios_y_var(df_resumen: pd.DataFrame, tc_var: float):
+def plot_escenarios_y_var(
+    df_resumen: pd.DataFrame,
+    fechas_future,
+    tc_var: float,
+    serie_lstm: pd.Series | None = None,
+) -> go.Figure:
     """
-    Gráfico de la media esperada, banda P05-P95 y nivel de TC mínimo propuesto
-    (derivado del VaR).
+    Gráfico de la media esperada, banda P05-P95, camino LSTM (si existe)
+    y nivel de TC mínimo propuesto (derivado del VaR).
     """
-    x = df_resumen.index
-    
+    x = pd.to_datetime(fechas_future)
+
     fig = go.Figure()
 
     # Media simulada (Monte Carlo / GARCH)
     fig.add_trace(
         go.Scatter(
-            x=fechas_future,
+            x=x,
             y=df_resumen["media"],
             mode="lines",
             name="Media proyectada (simulada)",
@@ -111,7 +116,7 @@ def plot_escenarios_y_var(df_resumen: pd.DataFrame, tc_var: float):
         )
     )
 
-    # Si tenemos camino LSTM, lo agregamos
+    # Camino LSTM (si lo tenemos)
     if serie_lstm is not None:
         fig.add_trace(
             go.Scatter(
@@ -122,8 +127,7 @@ def plot_escenarios_y_var(df_resumen: pd.DataFrame, tc_var: float):
                 line=dict(color="#ff7f0e", dash="dash"),
             )
         )
-    
-    
+
     # Banda 5%-95%
     fig.add_trace(
         go.Scatter(
@@ -135,17 +139,6 @@ def plot_escenarios_y_var(df_resumen: pd.DataFrame, tc_var: float):
             hoverinfo="skip",
             showlegend=True,
             name="Banda P5–P95",
-        )
-    )
-
-    # Media
-    fig.add_trace(
-        go.Scatter(
-            x=x,
-            y=df_resumen["media"],
-            mode="lines",
-            name="Media proyectada",
-            line=dict(width=2, color="#1f77b4"),
         )
     )
 
@@ -170,7 +163,6 @@ def plot_escenarios_y_var(df_resumen: pd.DataFrame, tc_var: float):
     )
 
     return fig
-
 
 def plot_backtesting(df_sunat_full: pd.DataFrame,
                      fecha_inicio: date,
@@ -356,54 +348,50 @@ def main():
             st.error(f"Error al ajustar el modelo GARCH: {e}")
             return
 
-        # 3) Generar fechas futuras y simular trayectorias
+        # 3) Generar fechas futuras
         fechas_future = generar_fechas_habiles(fecha_inicio, plazo_dias_habiles)
         n_steps = len(fechas_future)
 
         S0 = float(df_hist["tc_sunat"].iloc[-1])
+        n_sims = 10000  # Número fijo de simulaciones
 
-        # Número fijo de simulaciones
-        n_sims = 10000
+        # ------------------------------------------------------------
+        # 3bis) Camino determinista LSTM (no afecta VaR/CVaR)
+        # ------------------------------------------------------------
+        try:
+            serie_tc = df_sunat_habiles["tc_sunat"]
+            model_lstm, scaler_lstm, ventana_lstm = entrenar_lstm_tc_cached(
+                serie_tc=serie_tc,
+                fecha_corte=fecha_inicio,
+                ventana=60,
+                epochs=25,
+                batch_size=16,
+                seed=42,
+            )
 
-    # ------------------------------------------------------------
-    # 2bis) Camino determinista LSTM (no afecta VaR/CVaR)
-    # ------------------------------------------------------------
-    try:
-        # Entrenar LSTM usando toda la historia hasta la fecha de inicio
-        serie_tc = df_sunat_habiles["tc_sunat"]
-        model_lstm, scaler_lstm, ventana_lstm = entrenar_lstm_tc_cached(
-            serie_tc=serie_tc,
-            fecha_corte=fecha_inicio,
-            ventana=60,      # puedes jugar con esto
-            epochs=25,       # ojo con el tiempo de cómputo
-            batch_size=16,
-            seed=42,  # fijo → mismos resultados con mismos datos
-        )
+            serie_lstm = pronosticar_lstm_tc(
+                model=model_lstm,
+                scaler=scaler_lstm,
+                serie_tc=serie_tc,
+                fecha_corte=fecha_inicio,
+                fechas_future=pd.DatetimeIndex(fechas_future),
+                ventana=ventana_lstm,
+            )
 
-        # Pronosticar el TC LSTM sobre las mismas fechas_future
-        serie_lstm = pronosticar_lstm_tc(
-            model=model_lstm,
-            scaler=scaler_lstm,
-            serie_tc=serie_tc,
-            fecha_corte=fecha_inicio,
-            fechas_future=pd.DatetimeIndex(fechas_future),
-            ventana=ventana_lstm,
-        )
+            tc_lstm_final = float(serie_lstm.iloc[-1])
+        except Exception as e:
+            serie_lstm = None
+            tc_lstm_final = None
+            st.warning(f"No se pudo calcular el camino LSTM: {e}")
 
-        tc_lstm_final = float(serie_lstm.iloc[-1])
-   except Exception as e:
-        serie_lstm = None
-        tc_lstm_final = None
-        # Si algo falla, no rompemos la app, sólo mostramos un aviso
-        st.warning(f"No se pudo calcular el camino LSTM: {e}")    
-        
+        # 4) Simular trayectorias Monte Carlo con GARCH
         try:
             paths = simular_arma_garch(res_garch, S0=S0, n_steps=n_steps, n_sims=n_sims)
         except Exception as e:
             st.error(f"Error al simular trayectorias GARCH: {e}")
             return
 
-        # 4) Resumen numérico y TC mínimo / TC propuesto
+        # 5) Resumen numérico y TC mínimo / TC propuesto
         df_resumen = resumen_paths(paths, fechas_future)
         S_T = paths[:, -1]
 
@@ -428,10 +416,9 @@ def main():
             )
         with col3:
             if tc_lstm_final is not None:
-               st.metric("TC estimado por modelo (LSTM)", f"{tc_lstm_final:.4f}")
+                st.metric("TC estimado por modelo (LSTM)", f"{tc_lstm_final:.4f}")
             else:
-               st.metric("TC estimado por modelo (LSTM)", "N/D"
-            )
+                st.metric("TC estimado por modelo (LSTM)", "N/D")
         with col4:
             st.metric(
                 "Tipo de cambio mínimo propuesto",
@@ -460,7 +447,7 @@ def main():
 
         # Gráfico 2: media, banda y TC mínimo propuesto
         st.subheader("Escenarios de proyección y tipo de cambio mínimo propuesto")
-        fig_var = plot_escenarios_y_var(df_resumen, tc_var, serie_lstm)
+        fig_var = plot_escenarios_y_var(df_resumen, fechas_future, tc_var, serie_lstm)
         st.plotly_chart(fig_var, use_container_width=True)
 
         # Backtesting si aplica
@@ -481,13 +468,13 @@ def main():
         st.subheader("Nota metodológica (resumen)")
         st.info(
             "El modelo utiliza el tipo de cambio SUNAT limpio (días hábiles reales), "
-            "calcula retornos logarítmicos y ajusta un GARCH(1,1) con distribución normal sobre "
-            "retornos diarios en porcentaje. A partir de este modelo se simulan trayectorias de "
-            "Monte Carlo para el tipo de cambio hasta la fecha objetivo. Con la distribución "
-            "de niveles simulados al vencimiento se deriva un tipo de cambio mínimo propuesto "
-            "(VaR) y un tipo de cambio propuesto (CVaR)."
+            "calcula retornos logarítmicos y ajusta un modelo de volatilidad tipo GARCH "
+            "sobre retornos diarios en porcentaje. A partir de este modelo se simulan "
+            "trayectorias de Monte Carlo para el tipo de cambio hasta la fecha objetivo. "
+            "Con la distribución de niveles simulados al vencimiento se deriva un tipo de "
+            "cambio mínimo propuesto (VaR) y un tipo de cambio propuesto (CVaR). Además, "
+            "se muestra un camino determinista estimado con un modelo LSTM univariado."
         )
-
 
 if __name__ == "__main__":
     main()
