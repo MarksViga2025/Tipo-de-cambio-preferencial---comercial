@@ -1,4 +1,3 @@
-# tc_lstm_model.py
 """
 Módulo LSTM para pronosticar el nivel del TC SUNAT (sin simulaciones).
 Se usa como complemento del módulo de riesgo (GARCH/Monte Carlo), no lo reemplaza.
@@ -7,13 +6,23 @@ Se usa como complemento del módulo de riesgo (GARCH/Monte Carlo), no lo reempla
 from datetime import date
 from typing import Tuple
 
+import random
 import numpy as np
 import pandas as pd
 from sklearn.preprocessing import MinMaxScaler
 
+import tensorflow as tf
 from tensorflow.keras.models import Sequential
 from tensorflow.keras.layers import LSTM, Dense
 
+def set_global_seed(seed: int = 42) -> None:
+    """
+    Fija la semilla de las fuentes de aleatoriedad para que el
+    entrenamiento sea (lo más) reproducible posible.
+    """
+    random.seed(seed)
+    np.random.seed(seed)
+    tf.random.set_seed(seed)
 
 def _construir_ventanas(serie: np.ndarray, ventana: int):
     """
@@ -38,6 +47,7 @@ def entrenar_lstm_tc(
     ventana: int = 60,
     epochs: int = 25,
     batch_size: int = 16,
+    seed: int = 42,
 ) -> Tuple[Sequential, MinMaxScaler, int]:
     """
     Entrena un LSTM univariado sobre el TC SUNAT hasta 'fecha_corte' (inclusive).
@@ -46,6 +56,8 @@ def entrenar_lstm_tc(
     - fecha_corte: sólo se usan datos <= fecha_corte para entrenar.
     - ventana: tamaño de la ventana de entrada (nº de días pasados).
     """
+    set_global_seed(seed)
+
     # 1) Filtrar sólo datos <= fecha_corte
     serie_train = serie_tc.loc[serie_tc.index.date <= fecha_corte].dropna()
     if len(serie_train) <= ventana + 10:
